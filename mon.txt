@@ -1,0 +1,36 @@
+-- Connect to ASM instance as SYSASM (e.g., sqlplus / as sysasm)
+-- This query assumes your diskgroup name is 'DG_DATA'; replace if different.
+-- It extracts DB name from the ASM file path (e.g., +DG_DATA/ORCL/... -> 'ORCL')
+-- Includes only datafiles/tempfiles (type='DATAFILE' or 'TEMPFILE'); adjust if needed for controlfiles, etc.
+-- Outputs: DB_NAME, TOTAL_SPACE_MB (per DB), DG_TOTAL_MB, DG_FREE_MB, DG_USED_PCT
+
+WITH dg_info AS (
+SELECT
+name AS dg_name,
+total_mb,
+free_mb,
+ROUND((total_mb - free_mb) * 100 / total_mb, 2) AS used_pct
+FROM v$asm_diskgroup
+WHERE name = 'DG_DATA' -- Replace with your diskgroup name
+),
+db_usage AS (
+SELECT
+REGEXP_SUBSTR(a.full_path, '[^+^/]+', 1, 2) AS db_name, -- Extracts DB name (2nd token after +DG/)
+SUM(f.bytes / 1024 / 1024) AS total_space_mb
+FROM v$asm_file f
+JOIN v$asm_alias a ON (f.file_number = a.file_number AND f.group_number = a.group_number)
+CROSS JOIN dg_info di
+WHERE a.type IN ('DATAFILE', 'TEMPFILE') -- Add 'CONTROLFILE', 'ONLINELOG' if needed
+AND f.group_number = di.group_number
+AND a.full_path LIKE '+DG_DATA/%' -- Ensures path starts with your DG
+GROUP BY REGEXP_SUBSTR(a.full_path, '[^+^/]+', 1, 2)
+)
+SELECT
+du.db_name,
+ROUND(du.total_space_mb, 2) AS db_total_space_mb,
+di.total_mb AS dg_total_space_mb,
+di.free_mb AS dg_free_space_mb,
+di.used_pct AS dg_used_pct
+FROM db_usage du
+CROSS JOIN dg_info di
+ORDER BY du.total_space_mb DESC;
